@@ -1,0 +1,185 @@
+---
+title: "本國銀行分行密度"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+author: 1050391 呂奕 (CRM)
+output: 
+  prettydoc::html_pretty:
+    theme: hpstr
+    highlight: github
+    fig_caption: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r pkgs, include=FALSE}
+library(data.table)
+library(leaflet)
+library(leaflet.extras)
+library(htmltools)
+library(magrittr)
+library(KernSmooth)
+library(raster)
+library(DT)
+```
+
+```{r read data, include=FALSE}
+bank <- fread("data/bank_branch_gps.csv", colClasses = "character")
+bank[, c("lat", "lng") := lapply(.SD, as.numeric), .SDcols = c("lat", "lng")]
+
+# Filter Taiwan
+bank <- bank[lat %>% between(21.9, 25.3) & lng %>% between(120, 122)]
+```
+
+## 台灣本島分行數
+
+> 排除地址錯誤及國外分行點位
+
+```{r}
+bank[, .(分行數 = .N), by = .(bank_code, bank_name)][order(-分行數)] %>% 
+  DT::datatable(extensions = "Responsive")
+```
+
+
+## Kernel Density
+
+
+```{r, include=FALSE}
+d <- copy(bank)
+d[, color := ifelse(bank_name == "台新國際商業銀行", "red", "gray")]
+```
+
+```{r}
+m <- leaflet(d) %>%
+  # addTiles() %>%  # Add default OpenStreetMap map tiles
+  addProviderTiles(providers$OpenStreetMap.HOT) %>% 
+  setView(lng=120.9820246, lat=23.97387461111111, zoom = 7) %>% 
+  addHeatmap(lng = ~lng, lat = ~lat, intensity = 1,
+             blur = 20, max = 0.05, radius = 12, group = "Heat") %>% 
+  addCircleMarkers(lng = ~lng, lat = ~lat, 
+                   radius = 4, opacity = 0.6,
+                   popup = ~htmltools::htmlEscape(
+                     paste(bank_name, branch_name, sep="-")),
+                   color = ~color,
+                   data = d[bank_name != "台新國際商業銀行"],
+                   group = "Non-Taishin") %>% 
+  addCircleMarkers(lng = ~lng, lat = ~lat, 
+                   radius = 4, opacity = 0.6,
+                   popup = ~htmlEscape(paste(bank_name, branch_name, sep="-")),
+                   color = ~color,
+                   data = d[bank_name == "台新國際商業銀行"],
+                   group = "Taishin") %>% 
+  # Layers control
+  addLayersControl(
+    overlayGroups = c("Heat", "Non-Taishin", "Taishin"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
+m  # Print the map
+```
+
+<!-- ## Kernel Density -->
+
+```{r sp settings, eval=FALSE, include=FALSE}
+SET_COODINATE_REFERENCE_SYSTEM <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0"
+# SET_COODINATE_REFERENCE_SYSTEM <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+SET_DENSITY <- list(
+  GRID = c(5000, 5000),
+  THRESHOLD = 2
+)
+```
+
+
+```{r, eval=FALSE, include=FALSE}
+location <- bank[, .(lat, lng)]
+density_loc <- KernSmooth::bkde2D(
+  x = location,
+  # bandwidth = apply(X = location, MARGIN = 2, FUN = MASS::bandwidth.nrd),
+  # bandwidth = c(0.003, 0.003),
+  bandwidth = c(KernSmooth::dpik(location$lat), KernSmooth::dpik(location$lng)), 
+  # https://github.com/hrbrmstr/ggalt/blob/master/R/geom_bkde2d.r#L153
+  gridsize = SET_DENSITY$GRID
+)
+quantile(density_loc$fhat)
+# density_loc$fhat[density_loc$fhat < SET_DENSITY$THRESHOLD] <- NA
+
+loc_density_raster <- raster::raster(
+  list(x = density_loc$x1, y = density_loc$x2, z = density_loc$fhat)
+)
+raster::projection(loc_density_raster) <- sp::CRS(SET_COODINATE_REFERENCE_SYSTEM)
+```
+
+```{r, eval=FALSE, include=FALSE}
+color_pal <- leaflet::colorNumeric(
+  palette = c("#FFFFCC", "#41B6C4", "#0C2C84"), 
+  domain = raster::values(loc_density_raster), 
+  na.color = "transparent"
+)
+
+leaflet::leaflet(width = 900) %>%
+  leaflet::addTiles() %>%
+  # leaflet::setView(lng = mean(location[, lng]), lat = mean(location[, lat]),
+  #                  zoom = 7) %>%
+  setView(lng=120.9820246, lat=23.97387461111111, zoom = 7) %>% 
+  leaflet::addRasterImage(x = loc_density_raster, opacity = 0.5, project = F) %>%
+  addLegend(pal = color_pal, values = values(loc_density_raster))
+```
+
+## 分行密度計算
+
+```{r, include=FALSE}
+# codebase <- fread("data/codebase.tsv")
+# load("data/G97_TW_U0200_2015_WGS84.RData")
+# d <- bank[, .(lng, lat)]
+# coordinates(d) <- ~lng + lat
+# proj4string(d) <- CRS("+proj=longlat +datum=WGS84")
+# codebase_res <- sp::over(d, G97_TW_U0200_2015_WGS84)
+# codebase_res %>% setDT()
+# save(codebase_res, file="data/codebase_res.RData")
+load("data/codebase_res.RData")
+
+out <- bank[, c(.SD, codebase_res[, .(CODEBASE, CODE1, CODE2, VILLCODE, TOWN, COUNTY)])]
+out <- out[!.("A0802-0171-00"), on = .(CODEBASE)] # 排除國外錯的打點
+```
+
+台新銀行鄰近分行機構數
+
+```{r}
+codebase_count <- out[, .(CODEBASE_分行數 = .N), by = CODEBASE]
+code1_count <- out[, .( CODE1_分行數 = .N), by = CODE1]
+code2_count <- out[, .(CODE2_分行數 = .N), by = CODE2]
+vill_count <- out[, .(VILLAGE_分行數 = .N), by = VILLCODE]
+
+bank_basecode <- out[codebase_count, on = .(CODEBASE)][
+  code1_count, on = .(CODE1)][
+  code2_count, on = .(CODE2)][
+  vill_count, on = .(VILLCODE)]
+# bank_basecode %>% fwrite("result/bank_basecode.csv")
+```
+
+
+```{r}
+bank_basecode[.("台新國際商業銀行"), 
+    .(branch_name, addr_norm,
+      VILLAGE_分行數, CODE2_分行數, CODEBASE_分行數), 
+    on = .(bank_name)][order(-VILLAGE_分行數)] %>% 
+  DT::datatable(extensions = "Responsive")
+```
+
+## Reference
+
+- https://www.gps-coordinates.net/gps-coordinates-converter
+- https://rpubs.com/yamano357/90346
+- [leaflet.extras - leaflet.heat](http://rpubs.com/bhaskarvk/leaflet-heat)
+- [leaflet.extras - leaflet.heatmap](http://rpubs.com/bhaskarvk/leaflet-heatmap)
+
+1. 台灣地理中心(埔里鎮虎子山三角點)東經120度59分 北緯23度58分
+2. 台灣本島的四極
+    - 極東：台北貢寮鄉的三貂角，東經121度59分
+    - 極西：台南縣七股鄉的曾文溪口，東經120度04分
+    - 極南：屏東縣恆春鎮的鵝鑾鼻，北緯21度54分
+    - 極北：台北縣石門鄉的富貴角，北緯25度18分 
+
+
