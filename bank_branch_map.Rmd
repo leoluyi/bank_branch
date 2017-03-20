@@ -18,10 +18,11 @@ knitr::opts_chunk$set(echo = FALSE)
 library(data.table)
 library(leaflet)
 library(leaflet.extras)
+library(stringr)
 library(htmltools)
 library(magrittr)
 library(KernSmooth)
-library(raster)
+# library(raster)
 library(DT)
 ```
 
@@ -31,6 +32,8 @@ bank[, c("lat", "lng") := lapply(.SD, as.numeric), .SDcols = c("lat", "lng")]
 
 # Filter Taiwan
 bank <- bank[lat %>% between(21.9, 25.3) & lng %>% between(120, 122)]
+wrong_lat <- bank[branch_name=="台新國際商銀香港分行", lat]
+bank <- bank[lat != wrong_lat]
 ```
 
 ## 台灣本島分行數
@@ -129,24 +132,23 @@ leaflet::leaflet(width = 900) %>%
 
 ## 分行密度計算
 
-```{r, include=FALSE}
-# codebase <- fread("data/codebase.tsv")
-# load("data/G97_TW_U0200_2015_WGS84.RData")
-# d <- bank[, .(lng, lat)]
-# coordinates(d) <- ~lng + lat
-# proj4string(d) <- CRS("+proj=longlat +datum=WGS84")
-# codebase_res <- sp::over(d, G97_TW_U0200_2015_WGS84)
-# codebase_res %>% setDT()
-# save(codebase_res, file="data/codebase_res.RData")
-load("data/codebase_res.RData")
-
+```{r, eval=FALSE, include=FALSE}
+codebase <- fread("data/codebase.tsv")
+load("data/G97_TW_U0200_2015_WGS84.RData")
+d <- bank[, .(lng, lat)]
+coordinates(d) <- ~lng + lat
+proj4string(d) <- CRS("+proj=longlat +datum=WGS84")
+codebase_res <- sp::over(d, G97_TW_U0200_2015_WGS84)
+codebase_res %>% setDT()
 out <- bank[, c(.SD, codebase_res[, .(CODEBASE, CODE1, CODE2, VILLCODE, TOWN, COUNTY)])]
 out <- out[!.("A0802-0171-00"), on = .(CODEBASE)] # 排除國外錯的打點
+save(out, file = "result/out.csv")
 ```
 
 台新銀行鄰近分行機構數
 
 ```{r}
+load("result/out.csv")
 codebase_count <- out[, .(CODEBASE_分行數 = .N), by = CODEBASE]
 code1_count <- out[, .( CODE1_分行數 = .N), by = CODE1]
 code2_count <- out[, .(CODE2_分行數 = .N), by = CODE2]
@@ -162,7 +164,7 @@ bank_basecode <- out[codebase_count, on = .(CODEBASE)][
 
 ```{r}
 bank_basecode[.("台新國際商業銀行"), 
-    .(branch_name, addr_norm,
+    .(branch_code, branch_name, addr_norm,
       VILLAGE_分行數, CODE2_分行數, CODEBASE_分行數), 
     on = .(bank_name)][order(-VILLAGE_分行數)] %>% 
   DT::datatable(extensions = "Responsive")

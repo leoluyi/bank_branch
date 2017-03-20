@@ -5,6 +5,7 @@ library(data.table)
 library(stringr)
 library(parallel)
 library(addr2gps)
+library(testthat)
 
 set_config(config(ssl_verifypeer = 0L))
 
@@ -136,8 +137,9 @@ get_branch_info_ <- function(branch_code, ...) {
 
 get_branch_info <- function(branch_code = "all", ...) {
   # branch_code = "0040071"
+  testthat::expect_is(branch_code, "character")
   
-  if (branch_code == "all") {
+  if (identical(branch_code, "all")) {
     message("Getting all branch codes...")
     branch_code <- get_all_branch(bank_type = 1, ...)[, branch_code]
   }
@@ -159,7 +161,13 @@ get_branch_info <- function(branch_code = "all", ...) {
 }
 
 
-# test
+
+# Test --------------------------------------------------------------------
+
+branch_cd <- get_branch("812")[, branch_code]
+branch_info <- get_branch_info(branch_cd)
+
+
 system.time(
   out <- get_branch_info(branch_code = "all")
 )
@@ -179,7 +187,7 @@ bank[addr %>% str_detect("^[^a-zA-Z0-9#]"),
 
 # Get GPS coordinates
 gps <- bank[addr %>% str_detect("^[^a-zA-Z0-9#]"), addr] %>% 
-  addr2gps::get_gps()
+  addr2gps::get_gps(use_tor = F)
 gps <- gps[!is.na(lat)]
 
 # Merge
